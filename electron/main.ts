@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
 
+Menu.setApplicationMenu(null);
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
 async function createWindow() {
@@ -119,4 +120,107 @@ ipcMain.on('terminal:write', (_e, id: number, data: string) => {
 ipcMain.on('terminal:kill', (_e, id: number) => {
   const proc = shells.get(id);
   if (proc) { proc.kill(); shells.delete(id); }
+});
+
+// ---- python envs ----
+async function runCmd(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    const proc = spawn(cmd, args, { shell: true, windowsHide: true });
+    let out = '';
+    proc.stdout.setEncoding('utf8');
+    proc.stderr.setEncoding('utf8');
+    proc.stdout.on('data', (d: string) => { out += d; });
+    proc.stderr.on('data', (d: string) => { out += d; });
+    const timer = setTimeout(() => { proc.kill(); resolve(out); }, 5000);
+    proc.on('close', () => { clearTimeout(timer); resolve(out); });
+    proc.on('error', () => { clearTimeout(timer); resolve(''); });
+  });
+}
+
+type PythonEnv = { name: string; exePath: string; version: string; type: string };
+
+ipcMain.handle('python:listEnvs', async () => {
+  const envs: PythonEnv[] = [];
+  const seen = new Set<string>();
+
+  const getVersion = async (exe: string): Promise<string> => {
+    const out = await runCmd(exe, ['--version']);
+    const m = out.match(/Python\s+(\S+)/i);
+    return m ? m[1] : 'unknown';
+  };
+
+  // 1. Windows Python Launcher: py -0p lists all registered Pythons
+  const pyOut = await runCmd('py', ['-0p']);
+  for (const line of pyOut.split('\n')) {
+    const m = line.match(/^\s*-?(\S+)\s+(.+\.exe)/i);
+    if (m) {
+      const exePath = m[2].trim();
+      if (!seen.has(exePath.toLowerCase())) {
+        seen.add(exePath.toLowerCase());
+        const version = await getVersion(`"${exePath}"`);
+        envs.push({ name: `Python ${m[1]}`, exePath, version, type: 'system' });
+      }
+    }
+  }
+
+  // 2. where python — catches anything in PATH not caught above
+  const whereOut = await runCmd('where', ['python']);
+  for (const line of whereOut.split('\n')) {
+    const p = line.trim();
+    if (p && p.toLowerCase().endsWith('.exe') && !seen.has(p.toLowerCase())) {
+      seen.add(p.toLowerCase());
+      const version = await getVersion(`"${p}"`);
+      envs.push({ name: path.basename(path.dirname(p)), exePath: p, version, type: 'system' });
+    }
+  }
+
+  // 3. Conda environments
+  const condaOut = await runCmd('conda', ['env', 'list', '--json']);
+  try {
+    const json = JSON.parse(condaOut.slice(condaOut.indexOf('{')));
+    const condaEnvs: string[] = json.envs ?? [];
+    for (let i = 0; i < condaEnvs.length; i++) {
+      const envPath = condaEnvs[i];
+      const exePath = path.join(envPath, 'python.exe');
+      if (!seen.has(exePath.toLowerCase())) {
+        try {
+          await fs.access(exePath);
+          seen.add(exePath.toLowerCase());
+          const version = await getVersion(`"${exePath}"`);
+          const name = i === 0 ? 'base' : path.basename(envPath);
+          envs.push({ name: `conda: ${name}`, exePath, version, type: 'conda' });
+        } catch {}
+      }
+    }
+  } catch {}
+
+  // 4. Scan common venv/conda directories
+  const homeDir = process.env.USERPROFILE ?? process.env.HOME ?? '';
+  const scanDirs = [
+    path.join(homeDir, 'anaconda3', 'envs'),
+    path.join(homeDir, 'miniconda3', 'envs'),
+    path.join(homeDir, 'miniforge3', 'envs'),
+    path.join(homeDir, '.virtualenvs'),
+    path.join(homeDir, 'Envs'),
+    'C:\\ProgramData\\Anaconda3\\envs',
+    'C:\\ProgramData\\Miniconda3\\envs',
+  ];
+  for (const dir of scanDirs) {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries.filter((e) => e.isDirectory())) {
+        const exePath = path.join(dir, entry.name, 'python.exe');
+        if (!seen.has(exePath.toLowerCase())) {
+          try {
+            await fs.access(exePath);
+            seen.add(exePath.toLowerCase());
+            const version = await getVersion(`"${exePath}"`);
+            envs.push({ name: entry.name, exePath, version, type: 'venv' });
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  return envs;
 });

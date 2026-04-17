@@ -182,6 +182,41 @@ html, body { overflow: hidden; }
 
 /* ---- editor ---- */
 .editor { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-0); overflow: hidden; }
+/* ---- menubar ---- */
+.menubar {
+  display: flex; align-items: center; gap: 0;
+  padding: 0 8px;
+  height: 34px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.menubar-menus { display: flex; align-items: center; gap: 0; flex-shrink: 0; }
+.menu-entry { position: relative; }
+.menu-btn {
+  background: transparent; border: none; color: var(--text);
+  padding: 4px 10px; font-size: 13px; cursor: pointer; border-radius: 4px;
+  height: 28px; line-height: 1;
+}
+.menu-btn:hover, .menu-btn.active { background: var(--bg-3); }
+.menubar-path { flex: 1; padding: 0 8px; }
+.menu-dropdown {
+  position: absolute; top: calc(100% + 2px); left: 0; z-index: 400;
+  background: var(--bg-2); border: 1px solid var(--border-strong);
+  border-radius: 6px; min-width: 200px; padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  animation: fadeIn 0.1s ease;
+}
+.menu-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; border-radius: 4px; font-size: 13px; cursor: pointer;
+  gap: 24px;
+}
+.menu-item:hover:not(.disabled) { background: var(--bg-3); }
+.menu-item.disabled { color: var(--text-faint); cursor: default; }
+.menu-shortcut { color: var(--text-faint); font-size: 12px; flex-shrink: 0; }
+.menu-separator { height: 1px; background: var(--border); margin: 4px 0; }
+
 .main-toolbar {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 12px;
@@ -198,7 +233,7 @@ html, body { overflow: hidden; }
 }
 .main-toolbar button:hover:not(:disabled) { background: #3a3d44; }
 .main-toolbar button:disabled { color: var(--text-faint); cursor: default; }
-.path-bar-wrap { position: relative; flex: 1; max-width: 480px; }
+.path-bar-wrap { position: relative; flex: 1; }
 .path-bar {
   width: 100%;
   background: var(--bg-0); color: var(--text);

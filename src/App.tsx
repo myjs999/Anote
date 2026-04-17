@@ -28,6 +28,8 @@ import { lineNumbers } from '@codemirror/view';
 import ContextMenu, { MenuItem } from './ContextMenu';
 import InputDialog from './InputDialog';
 import ConfirmDialog from './ConfirmDialog';
+import PythonEnvPanel from './PythonEnvPanel';
+import MenuBar from './MenuBar';
 
 const langByExt: Record<string, () => any> = {
   cpp: cpp, c: cpp, h: cpp, hpp: cpp, cc: cpp, cxx: cpp,
@@ -100,6 +102,7 @@ export default function App() {
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const [closePrompt, setClosePrompt] = useState<{ idx: number } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pyEnvOpen, setPyEnvOpen] = useState(false);
   const [pathBar, setPathBar] = useState('');
   const [pathError, setPathError] = useState('');
   const { settings } = useSettings();
@@ -383,6 +386,7 @@ export default function App() {
   return (
     <div className="layout">
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {pyEnvOpen && <PythonEnvPanel onClose={() => setPyEnvOpen(false)} />}
       {/* Shared dialogs */}
       {ctxMenu && <ContextMenu {...ctxMenu} onClose={() => setCtxMenu(null)} />}
       {inputDlg && (
@@ -445,30 +449,41 @@ export default function App() {
       </aside>
 
       <main className="editor">
-        <div className="main-toolbar">
-          <div className="path-bar-wrap">
-            <input
-              className={`path-bar ${pathError ? 'path-bar-error' : ''}`}
-              value={pathBar}
-              onChange={(e) => { setPathBar(e.target.value); setPathError(''); }}
-              onFocus={(e) => e.target.select()}
-              onBlur={() => setPathBar(activeTab?.entry.path ?? '')}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); navigatePath(pathBar); } if (e.key === 'Escape') { setPathBar(activeTab?.entry.path ?? ''); setPathError(''); e.currentTarget.blur(); } }}
-              placeholder="Enter file path or URL and press Enter…"
-              spellCheck={false}
-            />
-            {pathError && <div className="path-hint">{pathError}</div>}
-          </div>
-          <div className="spacer" />
-          {isMd && activeTab && (
-            <button onClick={() => updateActive({ preview: !activeTab.preview })}>
-              {activeTab.preview ? 'Hide preview' : 'Show preview'}
-            </button>
-          )}
-          {activeTab && <button onClick={save} disabled={!activeTab.dirty}>Save (Ctrl+S)</button>}
-          <button onClick={() => setTermOpen((o) => !o)} title="Toggle terminal (Ctrl+`)">⌨ Terminal</button>
-          <button onClick={() => setSettingsOpen(true)} title="Settings">⚙ Settings</button>
-        </div>
+        <MenuBar
+          menus={[
+            {
+              label: 'File',
+              items: [
+                { label: 'Save', shortcut: 'Ctrl+S', action: save, disabled: !activeTab?.dirty },
+              ],
+            },
+            {
+              label: 'View',
+              items: [
+                { label: termOpen ? 'Hide Terminal' : 'Show Terminal', shortcut: 'Ctrl+`', action: () => setTermOpen((o) => !o) },
+                ...(isMd && activeTab
+                  ? [{ label: activeTab.preview ? 'Hide Preview' : 'Show Preview', action: () => updateActive({ preview: !activeTab.preview }) } as const]
+                  : []),
+              ],
+            },
+            {
+              label: 'Tools',
+              items: [
+                { label: 'Python Environments', action: () => setPyEnvOpen(true) },
+                { type: 'separator' as const },
+                { label: 'Settings', action: () => setSettingsOpen(true) },
+              ],
+            },
+          ]}
+          pathBar={pathBar}
+          pathError={pathError}
+          onPathChange={(v) => { setPathBar(v); setPathError(''); }}
+          onPathBlur={() => setPathBar(activeTab?.entry.path ?? '')}
+          onPathKeyDown={(e) => {
+            if (e.key === 'Enter') { e.currentTarget.blur(); navigatePath(pathBar); }
+            if (e.key === 'Escape') { setPathBar(activeTab?.entry.path ?? ''); setPathError(''); e.currentTarget.blur(); }
+          }}
+        />
         {tabs.length > 0 && (
           <TabBar tabs={tabs} activeIdx={activeIdx} onSelect={setActiveIdx} onClose={closeTab} />
         )}
@@ -481,13 +496,6 @@ export default function App() {
                   Modified: {new Date(fileMtime).toLocaleString()}
                 </span>
               )}
-              <div className="spacer" />
-              {isMd && (
-                <button onClick={() => updateActive({ preview: !activeTab.preview })}>
-                  {activeTab.preview ? 'Hide preview' : 'Show preview'}
-                </button>
-              )}
-              <button onClick={save} disabled={!activeTab.dirty}>Save (Ctrl+S)</button>
             </div>
             <div className={`pane ${isMd && activeTab.preview ? 'split' : ''}`}>
               <CodeMirror

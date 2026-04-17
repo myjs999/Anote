@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 export type Entry = { name: string; path: string; isDir: boolean };
+export type PythonEnv = { name: string; exePath: string; version: string; type: string };
 
 const api = {
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickFolder'),
@@ -14,6 +15,9 @@ const api = {
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
   clone: (src: string): Promise<string> => ipcRenderer.invoke('fs:clone', src),
   exists: (path: string): Promise<boolean> => ipcRenderer.invoke('fs:exists', path),
+  python: {
+    listEnvs: (): Promise<PythonEnv[]> => ipcRenderer.invoke('python:listEnvs'),
+  },
   terminal: {
     create: (cwd: string): Promise<number> => ipcRenderer.invoke('terminal:create', cwd),
     write: (id: number, data: string): void => ipcRenderer.send('terminal:write', id, data),
