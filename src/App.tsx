@@ -5,13 +5,6 @@ import hljs from 'highlight.js';
 import 'highlight.js/styles/github-dark.css';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
-import { EditorView } from '@codemirror/view';
-
-const fontTheme = EditorView.theme({
-  '&': { fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace" },
-  '.cm-content': { fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace" },
-  '.cm-gutters': { fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace" },
-});
 import { cpp } from '@codemirror/lang-cpp';
 import { xml } from '@codemirror/lang-xml';
 import { javascript } from '@codemirror/lang-javascript';
@@ -27,6 +20,11 @@ import { yaml } from '@codemirror/lang-yaml';
 import { sql } from '@codemirror/lang-sql';
 import UnsavedDialog from './Dialog';
 import Terminal from './Terminal';
+import SettingsPanel from './SettingsPanel';
+import { useSettings } from './SettingsContext';
+import { indentUnit } from '@codemirror/language';
+import { EditorView } from '@codemirror/view';
+import { lineNumbers } from '@codemirror/view';
 import ContextMenu, { MenuItem } from './ContextMenu';
 import InputDialog from './InputDialog';
 import ConfirmDialog from './ConfirmDialog';
@@ -70,12 +68,41 @@ type ConfirmDlg = { message: string; onConfirm: () => void };
 type CtxMenu = { x: number; y: number; items: MenuItem[] };
 
 const ROOT_KEY = 'notes-app:root';
+const BOOKMARKS_KEY = 'notes-app:bookmarks';
+type Bookmark = { name: string; path: string };
 
 export default function App() {
   const [root, setRoot] = useState<string | null>(() => localStorage.getItem(ROOT_KEY));
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
+    try { return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) ?? '[]'); } catch { return []; }
+  });
+
+  const saveBookmarks = (bms: Bookmark[]) => {
+    setBookmarks(bms);
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bms));
+  };
+
+  const addBookmark = () => {
+    if (!root) return;
+    if (bookmarks.find((b) => b.path === root)) return;
+    saveBookmarks([...bookmarks, { name: root.split(/[\\/]/).pop()!, path: root }]);
+  };
+
+  const removeBookmark = (path: string) => saveBookmarks(bookmarks.filter((b) => b.path !== path));
+
+  const openBookmark = (bm: Bookmark) => {
+    localStorage.setItem(ROOT_KEY, bm.path);
+    setRoot(bm.path);
+    setTabs([]);
+    setActiveIdx(-1);
+  };
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const [closePrompt, setClosePrompt] = useState<{ idx: number } | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pathBar, setPathBar] = useState('');
+  const [pathError, setPathError] = useState('');
+  const { settings } = useSettings();
   const [termOpen, setTermOpen] = useState(false);
   const [termHeight, setTermHeight] = useState(220);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
@@ -213,16 +240,19 @@ export default function App() {
     }
   }, [askInput, refreshTree]);
 
-  const deleteItem = useCallback((entry: Entry) => {
+  const cloneItem = useCallback(async (entry: Entry) => {
+    await window.api.clone(entry.path);
+    refreshTree();
+  }, [refreshTree]);
+
+  const deleteItem = useCallback(async (entry: Entry) => {
+    const doDelete = async () => { await window.api.remove(entry.path); refreshTree(); };
+    if (!settings.general.confirmDelete) { await doDelete(); return; }
     setConfirmDlg({
       message: `Delete "${entry.name}"?`,
-      onConfirm: async () => {
-        setConfirmDlg(null);
-        await window.api.remove(entry.path);
-        refreshTree();
-      },
+      onConfirm: async () => { setConfirmDlg(null); await doDelete(); },
     });
-  }, [refreshTree]);
+  }, [refreshTree, settings.general.confirmDelete]);
 
   const showEntryMenu = useCallback((e: React.MouseEvent, entry: Entry) => {
     e.preventDefault();
@@ -231,15 +261,17 @@ export default function App() {
       ? [
           { label: 'New File',   action: () => newItem(entry.path, false) },
           { label: 'New Folder', action: () => newItem(entry.path, true) },
+          { label: 'Clone',      action: () => cloneItem(entry) },
           { label: 'Rename',     action: () => renameItem(entry) },
           { label: 'Delete',     action: () => deleteItem(entry), danger: true },
         ]
       : [
+          { label: 'Clone',  action: () => cloneItem(entry) },
           { label: 'Rename', action: () => renameItem(entry) },
           { label: 'Delete', action: () => deleteItem(entry), danger: true },
         ];
     setCtxMenu({ x: e.clientX, y: e.clientY, items });
-  }, [newItem, renameItem, deleteItem]);
+  }, [newItem, cloneItem, renameItem, deleteItem]);
 
   const showSidebarMenu = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('.row')) return;
@@ -254,11 +286,88 @@ export default function App() {
     });
   }, [root, newItem]);
 
-  const langExtensions = useMemo(
-    () => (activeTab ? getLangExtensions(activeTab.entry.name) : []),
-    [activeTab?.entry.name],
-  );
+  // Auto-save
+  useEffect(() => {
+    if (!settings.general.autoSave) return;
+    const id = setInterval(() => {
+      setTabs((prev) => {
+        prev.forEach(async (t) => {
+          if (t.dirty) await window.api.write(t.entry.path, t.content);
+        });
+        return prev.map((t) => t.dirty ? { ...t, dirty: false } : t);
+      });
+    }, settings.general.autoSaveInterval * 1000);
+    return () => clearInterval(id);
+  }, [settings.general.autoSave, settings.general.autoSaveInterval]);
+
+  const editorExtensions = useMemo(() => {
+    const ff = `'${settings.editor.fontFamily}', Consolas, monospace`;
+    const fs = `${settings.editor.fontSize}px`;
+    const fontTheme = EditorView.theme({
+      '&': { fontFamily: ff, fontSize: fs },
+      '.cm-content': { fontFamily: ff, fontSize: fs },
+      '.cm-gutters': { fontFamily: ff, fontSize: fs },
+    });
+    const exts = [...(activeTab ? getLangExtensions(activeTab.entry.name) : []), fontTheme];
+    exts.push(indentUnit.of(' '.repeat(settings.editor.tabSize)));
+    if (settings.editor.wordWrap) exts.push(EditorView.lineWrapping);
+    if (!settings.editor.lineNumbers) exts.push(lineNumbers());
+    return exts;
+  }, [activeTab?.entry.name, settings.editor.fontFamily, settings.editor.fontSize, settings.editor.tabSize, settings.editor.wordWrap, settings.editor.lineNumbers]);
+
   const isMd = activeTab && /\.md$/i.test(activeTab.entry.name);
+
+  const [fileMtime, setFileMtime] = useState<string>('');
+  useEffect(() => {
+    if (!activeTab) { setFileMtime(''); return; }
+    const refresh = () =>
+      window.api.stat(activeTab.entry.path).then((s) => setFileMtime(s.mtime));
+    refresh();
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, [activeTab?.entry.path, activeTab?.dirty]);
+
+  // Sync path bar with active tab
+  useEffect(() => {
+    setPathBar(activeTab?.entry.path ?? '');
+  }, [activeTab?.entry.path]);
+
+  const showPathError = useCallback((msg: string) => {
+    setPathError(msg);
+    setTimeout(() => setPathError(''), 3000);
+  }, []);
+
+  const navigatePath = useCallback(async (raw: string) => {
+    const val = raw.trim();
+    if (!val) return;
+    if (/^https?:\/\//i.test(val)) {
+      try {
+        new URL(val);
+        await window.api.openExternal(val);
+      } catch {
+        showPathError('Invalid URL');
+      }
+      return;
+    }
+    try {
+      const exists = await window.api.exists(val);
+      if (!exists) {
+        showPathError(`Path not found: ${val}`);
+        setPathBar(activeTab?.entry.path ?? '');
+        return;
+      }
+      const stat = await window.api.stat(val);
+      if (stat.isDir) {
+        localStorage.setItem('notes-app:root', val);
+        window.location.reload();
+      } else {
+        openFile({ name: val.split(/[\\/]/).pop()!, path: val, isDir: false });
+      }
+    } catch (err: any) {
+      showPathError(err?.message ?? 'Cannot open path');
+      setPathBar(activeTab?.entry.path ?? '');
+    }
+  }, [activeTab, openFile, showPathError]);
   const promptTab = closePrompt !== null ? tabs[closePrompt.idx] : null;
 
   if (!root) {
@@ -273,6 +382,7 @@ export default function App() {
 
   return (
     <div className="layout">
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {/* Shared dialogs */}
       {ctxMenu && <ContextMenu {...ctxMenu} onClose={() => setCtxMenu(null)} />}
       {inputDlg && (
@@ -302,8 +412,28 @@ export default function App() {
       <aside className="sidebar" onContextMenu={showSidebarMenu}>
         <div className="sidebar-header">
           <span title={root}>{root.split(/[\\/]/).pop()}</span>
-          <button onClick={pickRoot} title="Change folder">…</button>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button onClick={addBookmark} title="Bookmark this folder">🔖</button>
+            <button onClick={pickRoot} title="Change folder">…</button>
+          </div>
         </div>
+        {bookmarks.length > 0 && (
+          <div className="bookmarks">
+            <div className="bookmarks-title">Bookmarks</div>
+            {bookmarks.map((bm) => (
+              <div
+                key={bm.path}
+                className={`bookmark-row ${bm.path === root ? 'active' : ''}`}
+                onClick={() => openBookmark(bm)}
+                title={bm.path}
+              >
+                <span className="bookmark-icon">◈</span>
+                <span className="bookmark-name">{bm.name}</span>
+                <span className="bookmark-remove" onClick={(e) => { e.stopPropagation(); removeBookmark(bm.path); }}>×</span>
+              </div>
+            ))}
+          </div>
+        )}
         <Tree
           dir={root}
           onSelect={openFile}
@@ -315,6 +445,30 @@ export default function App() {
       </aside>
 
       <main className="editor">
+        <div className="main-toolbar">
+          <div className="path-bar-wrap">
+            <input
+              className={`path-bar ${pathError ? 'path-bar-error' : ''}`}
+              value={pathBar}
+              onChange={(e) => { setPathBar(e.target.value); setPathError(''); }}
+              onFocus={(e) => e.target.select()}
+              onBlur={() => setPathBar(activeTab?.entry.path ?? '')}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); navigatePath(pathBar); } if (e.key === 'Escape') { setPathBar(activeTab?.entry.path ?? ''); setPathError(''); e.currentTarget.blur(); } }}
+              placeholder="Enter file path or URL and press Enter…"
+              spellCheck={false}
+            />
+            {pathError && <div className="path-hint">{pathError}</div>}
+          </div>
+          <div className="spacer" />
+          {isMd && activeTab && (
+            <button onClick={() => updateActive({ preview: !activeTab.preview })}>
+              {activeTab.preview ? 'Hide preview' : 'Show preview'}
+            </button>
+          )}
+          {activeTab && <button onClick={save} disabled={!activeTab.dirty}>Save (Ctrl+S)</button>}
+          <button onClick={() => setTermOpen((o) => !o)} title="Toggle terminal (Ctrl+`)">⌨ Terminal</button>
+          <button onClick={() => setSettingsOpen(true)} title="Settings">⚙ Settings</button>
+        </div>
         {tabs.length > 0 && (
           <TabBar tabs={tabs} activeIdx={activeIdx} onSelect={setActiveIdx} onClose={closeTab} />
         )}
@@ -322,6 +476,11 @@ export default function App() {
         {activeTab && (
           <>
             <div className="toolbar">
+              {fileMtime && (
+                <span className="file-mtime">
+                  Modified: {new Date(fileMtime).toLocaleString()}
+                </span>
+              )}
               <div className="spacer" />
               {isMd && (
                 <button onClick={() => updateActive({ preview: !activeTab.preview })}>
@@ -329,17 +488,17 @@ export default function App() {
                 </button>
               )}
               <button onClick={save} disabled={!activeTab.dirty}>Save (Ctrl+S)</button>
-              <button onClick={() => setTermOpen((o) => !o)} title="Toggle terminal (Ctrl+`)">⌨ Terminal</button>
             </div>
             <div className={`pane ${isMd && activeTab.preview ? 'split' : ''}`}>
               <CodeMirror
                 key={activeTab.entry.path}
                 value={activeTab.content}
                 theme={oneDark}
-                extensions={[...langExtensions, fontTheme]}
+                extensions={editorExtensions}
+                basicSetup={{ lineNumbers: settings.editor.lineNumbers }}
                 onChange={(v) => updateActive({ content: v, dirty: true })}
                 height="100%"
-                style={{ height: '100%', fontSize: 14, fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace" }}
+                style={{ height: '100%', fontSize: settings.editor.fontSize }}
               />
               {isMd && activeTab.preview && (
                 <div
@@ -354,7 +513,7 @@ export default function App() {
           <>
             <div className="term-resize-handle" onMouseDown={startDrag} />
             <div className="term-panel" style={{ height: termHeight }}>
-              <Terminal cwd={root} />
+              <Terminal cwd={root} fontSize={settings.terminal.fontSize} />
             </div>
           </>
         )}

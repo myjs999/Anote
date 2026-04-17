@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -46,6 +46,23 @@ ipcMain.handle('fs:create', async (_e, parent: string, name: string, isDir: bool
 });
 ipcMain.handle('fs:rename', async (_e, oldPath: string, newPath: string) => fs.rename(oldPath, newPath));
 ipcMain.handle('fs:delete', async (_e, target: string) => fs.rm(target, { recursive: true, force: true }));
+ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url));
+ipcMain.handle('fs:clone', async (_e, src: string) => {
+  const parsed = path.parse(src);
+  let dest = path.join(parsed.dir, parsed.name + ' copy' + parsed.ext);
+  let i = 2;
+  while (true) {
+    try { await fs.access(dest); dest = path.join(parsed.dir, `${parsed.name} copy ${i}${parsed.ext}`); i++; }
+    catch { break; }
+  }
+  const stat = await fs.stat(src);
+  if (stat.isDirectory()) await fs.cp(src, dest, { recursive: true });
+  else await fs.copyFile(src, dest);
+  return dest;
+});
+ipcMain.handle('fs:exists', async (_e, target: string) => {
+  try { await fs.access(target); return true; } catch { return false; }
+});
 ipcMain.handle('fs:stat', async (_e, target: string) => {
   const s = await fs.stat(target);
   return { size: s.size, mtime: s.mtime.toISOString(), isDir: s.isDirectory() };

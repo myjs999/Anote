@@ -11,6 +11,9 @@ const api = {
   rename: (oldPath: string, newPath: string): Promise<void> => ipcRenderer.invoke('fs:rename', oldPath, newPath),
   remove: (target: string): Promise<void> => ipcRenderer.invoke('fs:delete', target),
   stat: (target: string): Promise<{ size: number; mtime: string; isDir: boolean }> => ipcRenderer.invoke('fs:stat', target),
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
+  clone: (src: string): Promise<string> => ipcRenderer.invoke('fs:clone', src),
+  exists: (path: string): Promise<boolean> => ipcRenderer.invoke('fs:exists', path),
   terminal: {
     create: (cwd: string): Promise<number> => ipcRenderer.invoke('terminal:create', cwd),
     write: (id: number, data: string): void => ipcRenderer.send('terminal:write', id, data),

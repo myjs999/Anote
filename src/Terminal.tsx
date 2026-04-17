@@ -3,9 +3,9 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
-type Props = { cwd: string };
+type Props = { cwd: string; fontSize?: number };
 
-export default function Terminal({ cwd }: Props) {
+export default function Terminal({ cwd, fontSize = 13 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -27,7 +27,7 @@ export default function Terminal({ cwd }: Props) {
         brightCyan: '#56b6c2', brightWhite: '#ffffff',
       },
       fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace",
-      fontSize: 13,
+      fontSize,
       lineHeight: 1.4,
       cursorBlink: true,
       allowProposedApi: true,
